@@ -1,0 +1,77 @@
+# 贷前审批（pre_loan_approval）策略文件
+# rules：规则清单，expr 里可以用数据的列名和下面 params 里的参数名
+# strategies：按顺序取前两套做对比，第一套是基准
+# scan / matrix / monitor：阈值扫描、决策矩阵、PSI 监控的配置
+strategy:
+  params:
+    unit_cost: 15
+  rules:
+  - id: PA01
+    name: 大额异常交易
+    expr: large_abnormal_txn == 1
+  - id: PA02
+    name: 多头查询3次及以上
+    expr: query_cnt_3m >= 3
+  - id: PA03
+    name: 多头查询5次及以上
+    expr: query_cnt_3m >= 5
+  - id: PA04
+    name: 负债收入比超过0.6
+    expr: dti > 0.6
+  - id: PA05
+    name: 命中黑名单
+    expr: blacklist_hit == 1
+  - id: PA06
+    name: 近24个月逾期2次及以上
+    expr: overdue_cnt_24m >= 2
+  strategies:
+    champion:
+      name: 现行策略
+      rules:
+      - PA01
+      - PA02
+      - PA04
+    challenger:
+      name: 新策略
+      rules:
+      - PA01
+      - PA03
+      - PA04
+      - PA05
+      - PA06
+  scan:
+    field: credit_score
+    op: <
+    values:
+      start: 500
+      stop: 740
+      step: 20
+  matrix:
+    x:
+      field: query_cnt_3m
+      op: '>='
+      values:
+      - 2
+      - 3
+      - 4
+      - 5
+      - 6
+      - 7
+    y:
+      field: credit_score
+      op: <
+      values:
+      - 540
+      - 580
+      - 620
+      - 660
+      - 700
+  monitor:
+    psi_field: query_cnt_3m
+    bins:
+    - -1
+    - 0
+    - 1
+    - 2
+    - 4
+    - 999

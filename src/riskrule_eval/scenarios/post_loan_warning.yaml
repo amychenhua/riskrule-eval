@@ -1,0 +1,61 @@
+key: post_loan_warning
+order: 6
+name: 贷后预警
+name_en: Post-loan Early Warning
+unit: 一行一笔存量贷款在观察日的快照
+action: 触发预警，提前介入（外呼、走访、压缩敞口、追加担保）
+id_field: loan_id
+time_field: obs_date
+label:
+  field: label_default_6m
+  positive: 观察日后 6 个月内逾期达到 M3 及以上
+  window: 观察日后 6 个月
+notes:
+  - 预警的价值来自“提前处置比事后催收多挽回多少”，这个比例必须用历史上预警过和没预警过的两组客户对比得出，不能凭经验填。
+  - 同一笔贷款在多个观察日重复出现时，建议每笔贷款只保留一个观察日，或在结果里按贷款去重解读。
+  - 已经逾期的贷款预警意义有限，建议只保留观察日当前未逾期或轻度逾期的贷款。
+fields:
+  - {name: loan_id, label: 借据号, dtype: str, required: true, role: id, desc: 贷款借据唯一标识, example: L6600342190}
+  - {name: customer_id, label: 客户号, dtype: str, required: true, role: id, desc: 借款人客户号, example: C60055873}
+  - {name: obs_date, label: 观察日期, dtype: date, required: true, role: time, desc: 预警信号的快照日期, example: "2026-04-30"}
+  - {name: outstanding_balance, label: 贷款余额, dtype: float, required: true, role: amount, min: 0, desc: 观察日未偿本金（元）, example: 86000}
+  - {name: mob, label: 账龄, dtype: int, required: false, role: feature, min: 0, desc: 放款至观察日的月数, example: 9}
+  - {name: current_dpd, label: 当前逾期天数, dtype: int, required: true, role: feature, min: 0, desc: 观察日逾期天数，未逾期填0, example: 0}
+  - {name: repay_delay_days_avg_3m, label: 近3个月平均还款延迟天数, dtype: float, required: true, role: feature, min: 0, desc: 实际还款日晚于应还日的平均天数, example: 1.5}
+  - {name: payment_ratio_3m, label: 近3个月还款比例, dtype: float, required: true, role: feature, min: 0, desc: 实际还款额÷应还款额, example: 1.0}
+  - {name: new_external_overdue, label: 是否新增他行逾期, dtype: flag, required: true, role: feature, desc: 1=近3个月征信新增他行逾期记录, example: 0}
+  - {name: external_query_cnt_1m, label: 近1个月外部征信查询次数, dtype: int, required: true, role: feature, min: 0, desc: 其他机构贷款审批类查询次数, example: 0}
+  - {name: multi_lending_cnt_new_3m, label: 近3个月新增借款机构数, dtype: int, required: true, role: feature, min: 0, desc: 近3个月新增授信或放款的机构数量, example: 1}
+  - {name: salary_inflow_drop, label: 是否收入流水骤降, dtype: flag, required: true, role: feature, desc: 1=代发工资中断或经营流水较前期下降一半以上, example: 0}
+  - {name: contact_lost, label: 是否失联, dtype: flag, required: false, role: feature, desc: 1=近期多次联系不上借款人, example: 0}
+  - {name: litigation_flag, label: 是否新增涉诉, dtype: flag, required: false, role: feature, desc: 1=近3个月新增被执行或涉诉信息, example: 0}
+  - {name: warning_score, label: 预警评分, dtype: float, required: false, role: score, min: 0, max: 100, desc: 模型评分，越高风险越高, example: 28.4}
+  - {name: monthly_revenue, label: 月均收益, dtype: float, required: true, role: value, desc: 该笔贷款月均净收益（元）, example: 520}
+  - {name: label_default_6m, label: 未来6个月是否违约, dtype: flag, required: true, role: label, desc: 1=观察日后6个月内M3及以上，0=否, example: 0}
+value_model:
+  description: 对后来违约的贷款提前预警并处置，多挽回一部分余额；对没有违约的贷款误预警，会打扰客户并增加流失；每条预警都有处置成本。
+  params:
+    recovery_uplift: {value: 0.15, label: 提前处置较事后催收多挽回的余额比例}
+    churn_rate: {value: 0.03, label: 误预警导致的新增流失率}
+    disturb_cost: {value: 20, label: 单笔误预警的客户打扰成本(元)}
+    action_cost: {value: 30, label: 单条预警的处置成本(元)}
+  avoided_loss: "outstanding_balance * recovery_uplift"
+  opportunity_cost: "monthly_revenue * 12 * churn_rate + disturb_cost"
+  unit_cost: "action_cost"
+strategy:
+  rules:
+    - {id: PW01, name: 新增他行逾期, expr: "new_external_overdue == 1"}
+    - {id: PW02, name: 收入流水骤降, expr: "salary_inflow_drop == 1"}
+    - {id: PW03, name: 还款持续延迟, expr: "repay_delay_days_avg_3m >= 5"}
+    - {id: PW04, name: 近3个月未足额还款, expr: "payment_ratio_3m < 0.8"}
+    - {id: PW05, name: 短期新增多家借款, expr: "multi_lending_cnt_new_3m >= 3"}
+    - {id: PW06, name: 失联或新增涉诉, expr: "contact_lost == 1 or litigation_flag == 1"}
+    - {id: PW07, name: 近1个月外部查询激增, expr: "external_query_cnt_1m >= 3"}
+  strategies:
+    champion: {name: 现行策略, rules: [PW01, PW03, PW07]}
+    challenger: {name: 新策略, rules: [PW01, PW02, PW03, PW04, PW05, PW06]}
+  scan: {field: warning_score, op: ">=", values: {start: 30, stop: 95, step: 5}}
+  matrix:
+    x: {field: repay_delay_days_avg_3m, op: ">=", values: [2, 3, 5, 7, 10]}
+    y: {field: warning_score, op: ">=", values: [50, 60, 70, 80, 90]}
+  monitor: {psi_field: warning_score}

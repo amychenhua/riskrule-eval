@@ -1,0 +1,1 @@
+﻿app_id,customer_id,apply_time,apply_amount,channel,apply_hour,device_app_cnt_7d,id_phone_cnt,ip_app_cnt_1d,id_blacklist_hit,contact_blacklist_hit,liveness_fail_cnt,info_inconsistent,gps_city_mismatch,fraud_score,expected_profit,label_fraud

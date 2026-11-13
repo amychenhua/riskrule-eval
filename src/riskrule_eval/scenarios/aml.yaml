@@ -1,0 +1,62 @@
+key: aml
+order: 1
+name: 反洗钱
+name_en: Anti-Money Laundering
+unit: 一行一笔被监测的交易
+action: 生成可疑交易预警，转人工甄别
+id_field: txn_id
+time_field: txn_time
+label:
+  field: label_suspicious
+  positive: 经人工甄别确认可疑并上报可疑交易报告
+  window: 预警后 1-3 个月（甄别结案周期）
+notes:
+  - 反洗钱规则的首要目标是合规，净收益里的“单笔有效预警价值”是管理假设，请与合规部门共同确定后再用于决策。
+  - 未被任何规则预警的交易通常没有甄别结论，标签会偏少。建议对未预警交易做抽样回溯甄别，补充标签。
+  - 重点看预警量、预警有效率（精确率）和召回率，净收益作为辅助口径。
+fields:
+  - {name: txn_id, label: 交易流水号, dtype: str, required: true, role: id, desc: 交易唯一标识, example: T202601050000123}
+  - {name: customer_id, label: 客户号, dtype: str, required: true, role: id, desc: 交易主体客户号, example: C10023876}
+  - {name: txn_time, label: 交易时间, dtype: datetime, required: true, role: time, desc: 交易发生时间, example: "2026-01-05 14:32:10"}
+  - {name: txn_amount, label: 交易金额, dtype: float, required: true, role: amount, min: 0, desc: 折人民币金额（元）, example: 48500}
+  - {name: channel, label: 交易渠道, dtype: enum, required: true, role: feature, choices: [counter, online, mobile, atm], desc: counter=柜面 online=网银 mobile=手机银行 atm=自助设备, example: mobile}
+  - {name: is_cross_border, label: 是否跨境, dtype: flag, required: true, role: feature, desc: 1=跨境交易, example: 0}
+  - {name: cash_flag, label: 是否现金交易, dtype: flag, required: true, role: feature, desc: 1=现金存取, example: 0}
+  - {name: counterparty_region_risk, label: 对手方地区风险, dtype: enum, required: true, role: feature, choices: [low, medium, high], desc: 对手方所在国家或地区的洗钱风险等级, example: low}
+  - {name: customer_risk_level, label: 客户洗钱风险等级, dtype: enum, required: true, role: feature, choices: [low, medium, high], desc: 客户尽职调查评定的风险等级, example: medium}
+  - {name: account_age_days, label: 开户天数, dtype: int, required: false, role: feature, min: 0, desc: 交易日距开户日天数, example: 420}
+  - {name: txn_cnt_24h, label: 近24小时交易笔数, dtype: int, required: true, role: feature, min: 0, desc: 含本笔, example: 3}
+  - {name: amt_sum_24h, label: 近24小时累计金额, dtype: float, required: true, role: feature, min: 0, desc: 含本笔（元）, example: 96000}
+  - {name: in_out_ratio_7d, label: 近7天转出转入比, dtype: float, required: true, role: feature, min: 0, desc: 近7天转出金额÷转入金额，接近1表示快进快出, example: 0.97}
+  - {name: new_counterparty_cnt_7d, label: 近7天新增对手方数, dtype: int, required: false, role: feature, min: 0, desc: 此前无往来的对手方数量, example: 2}
+  - {name: near_threshold_cnt_7d, label: 近7天临界金额交易笔数, dtype: int, required: true, role: feature, min: 0, desc: 金额略低于大额报告标准的交易笔数（疑似拆分）, example: 0}
+  - {name: dormant_reactivated, label: 是否休眠账户突然启用, dtype: flag, required: false, role: feature, desc: 1=长期不动户近期突然发生交易, example: 0}
+  - {name: aml_score, label: 洗钱风险评分, dtype: float, required: false, role: score, min: 0, max: 100, desc: 模型评分，越高越可疑, example: 37.5}
+  - {name: label_suspicious, label: 是否确认可疑, dtype: flag, required: true, role: label, desc: 1=甄别后确认可疑并上报，0=排除, example: 0}
+value_model:
+  description: 命中且确认可疑的交易带来合规价值并可拦截部分涉案资金；命中但被排除的交易产生客户打扰成本；每条预警都有人工甄别成本。
+  params:
+    value_per_true_alert: {value: 5000, label: 单笔有效预警的合规价值(元)}
+    funds_intercept_rate: {value: 0.02, label: 涉案资金拦截或止损比例}
+    customer_friction_cost: {value: 30, label: 单笔误报的客户打扰成本(元)}
+    alert_review_cost: {value: 80, label: 单条预警人工甄别成本(元)}
+  avoided_loss: "value_per_true_alert + txn_amount * funds_intercept_rate"
+  opportunity_cost: "customer_friction_cost"
+  unit_cost: "alert_review_cost"
+strategy:
+  rules:
+    - {id: AML01, name: 大额现金交易, expr: "cash_flag == 1 and txn_amount >= 50000"}
+    - {id: AML02, name: 疑似拆分交易, expr: "near_threshold_cnt_7d >= 3"}
+    - {id: AML03, name: 快进快出, expr: "in_out_ratio_7d >= 0.95 and amt_sum_24h >= 100000"}
+    - {id: AML04, name: 高风险地区跨境, expr: "is_cross_border == 1 and counterparty_region_risk == 'high'"}
+    - {id: AML05, name: 短时高频交易, expr: "txn_cnt_24h >= 8"}
+    - {id: AML06, name: 休眠账户启用后大额交易, expr: "dormant_reactivated == 1 and txn_amount >= 20000"}
+    - {id: AML07, name: 高风险客户新增多个对手方, expr: "customer_risk_level == 'high' and new_counterparty_cnt_7d >= 3"}
+  strategies:
+    champion: {name: 现行策略, rules: [AML01, AML02, AML03, AML05]}
+    challenger: {name: 新策略, rules: [AML01, AML02, AML03, AML04, AML06, AML07]}
+  scan: {field: aml_score, op: ">=", values: {start: 30, stop: 95, step: 5}}
+  matrix:
+    x: {field: near_threshold_cnt_7d, op: ">=", values: [1, 2, 3, 4, 5]}
+    y: {field: aml_score, op: ">=", values: [50, 60, 70, 80, 90]}
+  monitor: {psi_field: aml_score}

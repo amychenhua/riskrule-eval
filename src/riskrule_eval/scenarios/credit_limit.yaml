@@ -1,0 +1,61 @@
+key: credit_limit
+order: 5
+name: 贷中调额
+name_en: Credit Limit Management
+unit: 一行一个存量账户在检视日的快照
+action: 下调额度或冻结未用额度
+id_field: account_id
+time_field: review_date
+label:
+  field: label_bad_12m
+  positive: 检视日后 12 个月内逾期达到 M3 及以上
+  window: 检视日后 12 个月
+notes:
+  - 本场景评估的是降额类规则。提额策略的收益结构不同（增量收入对增量风险），需要另行建模。
+  - 降额能避免的损失只是“坏客户违约前会新增动用的那部分未用额度”，已经用掉的余额降额救不回来。
+  - 降额会影响好客户的用信和留存，机会成本里的收入损失率和流失率请用历史降额客群的实际数据校准。
+fields:
+  - {name: account_id, label: 账户号, dtype: str, required: true, role: id, desc: 账户唯一标识, example: AC5500128876}
+  - {name: customer_id, label: 客户号, dtype: str, required: true, role: id, desc: 账户所属客户号, example: C50076120}
+  - {name: review_date, label: 检视日期, dtype: date, required: true, role: time, desc: 额度检视的快照日期, example: "2026-03-31"}
+  - {name: current_limit, label: 当前额度, dtype: float, required: true, role: amount, min: 0, desc: 检视日授信额度（元）, example: 50000}
+  - {name: balance, label: 当前余额, dtype: float, required: true, role: amount, min: 0, desc: 检视日已用额度（元）, example: 31200}
+  - {name: utilization, label: 额度使用率, dtype: float, required: true, role: feature, min: 0, desc: 余额÷额度, example: 0.62}
+  - {name: months_on_book, label: 账龄, dtype: int, required: false, role: feature, min: 0, desc: 开户至检视日的月数, example: 28}
+  - {name: dpd_max_6m, label: 近6个月最大逾期天数, dtype: int, required: true, role: feature, min: 0, desc: 近6个月内出现过的最大逾期天数, example: 0}
+  - {name: overlimit_cnt_6m, label: 近6个月超限次数, dtype: int, required: false, role: feature, min: 0, desc: 余额超过额度的月数, example: 0}
+  - {name: cash_advance_ratio_3m, label: 近3个月取现占比, dtype: float, required: true, role: feature, min: 0, max: 1, desc: 取现金额÷总交易金额, example: 0.08}
+  - {name: min_pay_cnt_6m, label: 近6个月最低还款次数, dtype: int, required: true, role: feature, min: 0, max: 6, desc: 只还最低还款额的月数, example: 1}
+  - {name: external_query_cnt_3m, label: 近3个月外部征信查询次数, dtype: int, required: true, role: feature, min: 0, desc: 其他机构的贷款审批类查询次数, example: 1}
+  - {name: external_debt_growth_6m, label: 近6个月外部负债增幅, dtype: float, required: true, role: feature, desc: 他行负债余额增长比例，0.5表示增长50%, example: 0.12}
+  - {name: behavior_score, label: 行为评分, dtype: float, required: false, role: score, min: 300, max: 850, desc: 行为评分卡分数，越低风险越高, example: 668}
+  - {name: limit_reduction, label: 拟下调额度, dtype: float, required: true, role: value, min: 0, desc: 若命中规则将下调的未用额度金额（当前额度−调整后额度，元）, example: 15000}
+  - {name: annual_revenue, label: 账户年收益, dtype: float, required: true, role: value, desc: 该账户近12个月贡献的净收益（元）, example: 3100}
+  - {name: label_bad_12m, label: 未来12个月是否坏账, dtype: flag, required: true, role: label, desc: 1=检视日后12个月内M3及以上，0=否, example: 0}
+value_model:
+  description: 对坏客户降额，避免的损失是被收回的未用额度中其违约前本会动用的部分；对好客户降额，损失一部分用信收入并增加流失；每次调额都有通知成本。
+  params:
+    ccf: {value: 0.6, label: 信用转换系数（坏客户违约前动用未用额度的比例）}
+    lgd: {value: 0.7, label: 违约损失率}
+    revenue_loss_rate: {value: 0.15, label: 好客户被降额后的收入损失比例}
+    churn_rate: {value: 0.05, label: 好客户被降额后的新增流失率}
+    notify_cost: {value: 2, label: 单户调额的通知与客服成本(元)}
+  avoided_loss: "limit_reduction * ccf * lgd"
+  opportunity_cost: "annual_revenue * (revenue_loss_rate + churn_rate)"
+  unit_cost: "notify_cost"
+strategy:
+  rules:
+    - {id: CL01, name: 近6个月出现30天以上逾期, expr: "dpd_max_6m >= 30"}
+    - {id: CL02, name: 高使用率且多次最低还款, expr: "utilization >= 0.9 and min_pay_cnt_6m >= 3"}
+    - {id: CL03, name: 取现占比过高, expr: "cash_advance_ratio_3m >= 0.5"}
+    - {id: CL04, name: 外部负债快速增长, expr: "external_debt_growth_6m >= 0.5"}
+    - {id: CL05, name: 外部多头查询, expr: "external_query_cnt_3m >= 4"}
+    - {id: CL06, name: 多次超限, expr: "overlimit_cnt_6m >= 2"}
+  strategies:
+    champion: {name: 现行策略, rules: [CL01, CL05]}
+    challenger: {name: 新策略, rules: [CL01, CL02, CL03, CL04, CL06]}
+  scan: {field: behavior_score, op: "<", values: {start: 500, stop: 720, step: 20}}
+  matrix:
+    x: {field: utilization, op: ">=", values: [0.5, 0.6, 0.7, 0.8, 0.9]}
+    y: {field: behavior_score, op: "<", values: [540, 580, 620, 660, 700]}
+  monitor: {psi_field: utilization}

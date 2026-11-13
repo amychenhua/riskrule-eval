@@ -1,0 +1,1 @@
+﻿loan_id,customer_id,obs_date,outstanding_balance,mob,current_dpd,repay_delay_days_avg_3m,payment_ratio_3m,new_external_overdue,external_query_cnt_1m,multi_lending_cnt_new_3m,salary_inflow_drop,contact_lost,litigation_flag,warning_score,monthly_revenue,label_default_6m

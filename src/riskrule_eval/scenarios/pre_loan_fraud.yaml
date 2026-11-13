@@ -1,0 +1,59 @@
+key: pre_loan_fraud
+order: 3
+name: 贷前反欺诈
+name_en: Pre-loan Anti-Fraud
+unit: 一行一笔贷款申请
+action: 拒绝申请或转人工核查
+id_field: app_id
+time_field: apply_time
+label:
+  field: label_fraud
+  positive: 确认欺诈（调查认定，或首期即逾期30天以上）
+  window: 放款后 1-3 个月
+notes:
+  - 被拒绝的申请没有还款表现。只用已放款样本评估会偏乐观，需要做拒绝推断或保留少量探索性放款。
+  - 欺诈标签与信用坏账标签要分开定义，本场景只看欺诈。
+  - 团伙欺诈的特征是聚集性（同设备、同地址、同联系人），关联类字段尽量保留原始计数。
+fields:
+  - {name: app_id, label: 申请编号, dtype: str, required: true, role: id, desc: 申请唯一标识, example: A202602030001}
+  - {name: customer_id, label: 客户号, dtype: str, required: true, role: id, desc: 申请人客户号, example: C30087211}
+  - {name: apply_time, label: 申请时间, dtype: datetime, required: true, role: time, desc: 申请提交时间, example: "2026-02-03 02:15:44"}
+  - {name: apply_amount, label: 申请金额, dtype: float, required: true, role: amount, min: 0, desc: 申请金额（元）, example: 50000}
+  - {name: channel, label: 进件渠道, dtype: enum, required: true, role: feature, choices: [app, h5, partner, branch], desc: app=自营APP h5=网页 partner=合作渠道 branch=线下网点, example: partner}
+  - {name: apply_hour, label: 申请时点, dtype: int, required: false, role: feature, min: 0, max: 23, desc: 申请提交的小时（0-23）, example: 2}
+  - {name: device_app_cnt_7d, label: 同设备近7天申请数, dtype: int, required: true, role: feature, min: 0, desc: 同一设备指纹近7天的申请笔数（含本笔）, example: 4}
+  - {name: id_phone_cnt, label: 同身份证关联手机号数, dtype: int, required: true, role: feature, min: 0, desc: 同一身份证历史关联的手机号数量, example: 1}
+  - {name: ip_app_cnt_1d, label: 同IP当日申请数, dtype: int, required: true, role: feature, min: 0, desc: 同一IP当日申请笔数（含本笔）, example: 2}
+  - {name: id_blacklist_hit, label: 身份证是否命中黑名单, dtype: flag, required: true, role: feature, desc: 1=命中内外部欺诈黑名单, example: 0}
+  - {name: contact_blacklist_hit, label: 联系人是否命中黑名单, dtype: flag, required: true, role: feature, desc: 1=紧急联系人命中黑名单, example: 0}
+  - {name: liveness_fail_cnt, label: 活体检测失败次数, dtype: int, required: true, role: feature, min: 0, desc: 本次申请中人脸活体检测失败次数, example: 0}
+  - {name: info_inconsistent, label: 申请信息是否不一致, dtype: flag, required: true, role: feature, desc: 1=申请资料与征信或运营商信息矛盾, example: 0}
+  - {name: gps_city_mismatch, label: 定位与常住地是否不符, dtype: flag, required: false, role: feature, desc: 1=申请定位城市与填写的常住城市不同, example: 0}
+  - {name: fraud_score, label: 欺诈评分, dtype: float, required: false, role: score, min: 0, max: 100, desc: 模型或第三方评分，越高越可疑, example: 41.0}
+  - {name: expected_profit, label: 预计利润, dtype: float, required: true, role: value, desc: 该笔申请若正常还款的预计利润（元）, example: 2600}
+  - {name: label_fraud, label: 是否欺诈, dtype: flag, required: true, role: label, desc: 1=确认欺诈，0=非欺诈, example: 0}
+value_model:
+  description: 拒绝一笔欺诈申请，避免的损失是放款金额乘以欺诈损失率；误拒正常申请损失其预计利润；每笔命中都有核查成本。
+  params:
+    fraud_loss_rate: {value: 0.9, label: 欺诈损失率（放款金额中无法收回的比例）}
+    review_cost: {value: 20, label: 单笔命中的核查成本(元)}
+  avoided_loss: "apply_amount * fraud_loss_rate"
+  opportunity_cost: "expected_profit"
+  unit_cost: "review_cost"
+strategy:
+  rules:
+    - {id: PF01, name: 身份证命中黑名单, expr: "id_blacklist_hit == 1"}
+    - {id: PF02, name: 联系人命中黑名单, expr: "contact_blacklist_hit == 1"}
+    - {id: PF03, name: 同设备多次申请, expr: "device_app_cnt_7d >= 4"}
+    - {id: PF04, name: 身份证关联多个手机号, expr: "id_phone_cnt >= 3"}
+    - {id: PF05, name: 活体检测多次失败, expr: "liveness_fail_cnt >= 2"}
+    - {id: PF06, name: 凌晨申请且信息不一致, expr: "apply_hour <= 5 and info_inconsistent == 1"}
+    - {id: PF07, name: 同IP当日多笔申请, expr: "ip_app_cnt_1d >= 4"}
+  strategies:
+    champion: {name: 现行策略, rules: [PF01, PF03, PF07]}
+    challenger: {name: 新策略, rules: [PF01, PF02, PF03, PF04, PF05, PF06]}
+  scan: {field: fraud_score, op: ">=", values: {start: 30, stop: 95, step: 5}}
+  matrix:
+    x: {field: device_app_cnt_7d, op: ">=", values: [2, 3, 4, 5, 6]}
+    y: {field: fraud_score, op: ">=", values: [50, 60, 70, 80, 90]}
+  monitor: {psi_field: fraud_score}

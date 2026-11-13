@@ -1,0 +1,56 @@
+key: pre_loan_approval
+order: 4
+name: 贷前审批
+name_en: Pre-loan Approval
+unit: 一行一笔贷款申请
+action: 拒绝申请
+id_field: app_id
+time_field: apply_time
+label:
+  field: label_bad
+  positive: 坏账（表现期内逾期达到 M3 及以上）
+  window: 放款后 6-12 个月（现金贷 3-6 个月，抵押类 12-24 个月）
+notes:
+  - 被拒绝的申请没有还款表现，需要做拒绝推断（评分外推、分段插补或探索性放款）后再评估。
+  - 预计利润和预计损失对每笔申请都要填。引擎只在好客户上使用利润、在坏客户上使用损失。
+  - 样本窗口建议取 6-12 个月的申请，并覆盖完整的季节周期。
+fields:
+  - {name: app_id, label: 申请编号, dtype: str, required: true, role: id, desc: 申请唯一标识, example: A202601150087}
+  - {name: customer_id, label: 客户号, dtype: str, required: true, role: id, desc: 申请人客户号, example: C40011902}
+  - {name: apply_time, label: 申请时间, dtype: datetime, required: true, role: time, desc: 申请提交时间, example: "2026-01-15 10:02:31"}
+  - {name: apply_amount, label: 申请金额, dtype: float, required: true, role: amount, min: 0, desc: 申请金额（元）, example: 120000}
+  - {name: term_months, label: 期限, dtype: int, required: false, role: feature, min: 1, desc: 贷款期限（月）, example: 24}
+  - {name: income_monthly, label: 月收入, dtype: float, required: false, role: feature, min: 0, desc: 核实后的月收入（元）, example: 12500}
+  - {name: dti, label: 负债收入比, dtype: float, required: true, role: feature, min: 0, desc: 月还款额÷月收入, example: 0.42}
+  - {name: query_cnt_3m, label: 近3个月征信查询次数, dtype: int, required: true, role: feature, min: 0, desc: 贷款审批与信用卡审批类查询次数, example: 2}
+  - {name: overdue_cnt_24m, label: 近24个月逾期次数, dtype: int, required: true, role: feature, min: 0, desc: 征信报告中近24个月逾期期数, example: 0}
+  - {name: blacklist_hit, label: 是否命中黑名单, dtype: flag, required: true, role: feature, desc: 1=申请人或关联人命中内外部黑名单, example: 0}
+  - {name: large_abnormal_txn, label: 是否有大额异常交易, dtype: flag, required: false, role: feature, desc: 1=近期流水存在显著偏离历史的大额交易, example: 0}
+  - {name: info_inconsistent, label: 申请信息是否不一致, dtype: flag, required: false, role: feature, desc: 1=申请资料与征信或工商信息矛盾, example: 0}
+  - {name: credit_score, label: 信用评分, dtype: float, required: false, role: score, min: 300, max: 850, desc: 评分卡分数，越低风险越高, example: 655}
+  - {name: expected_profit, label: 预计利润, dtype: float, required: true, role: value, desc: 该笔申请若正常还款的预计利润（元），已扣资金成本, example: 5400}
+  - {name: loss_amount, label: 预计损失金额, dtype: float, required: true, role: value, min: 0, desc: 该笔申请若违约的预计损失（违约敞口×违约损失率，元）, example: 66000}
+  - {name: label_bad, label: 是否坏账, dtype: flag, required: true, role: label, desc: 1=坏账，0=正常, example: 0}
+value_model:
+  description: 拒绝一个坏客户，避免其预计损失；误拒一个好客户，损失其预计利润；每笔拒绝都有通知与客诉处理成本。
+  params:
+    unit_cost: {value: 15, label: 单笔拒绝的运营成本(元)}
+  avoided_loss: "loss_amount"
+  opportunity_cost: "expected_profit"
+  unit_cost: "unit_cost"
+strategy:
+  rules:
+    - {id: PA01, name: 大额异常交易, expr: "large_abnormal_txn == 1"}
+    - {id: PA02, name: 多头查询3次及以上, expr: "query_cnt_3m >= 3"}
+    - {id: PA03, name: 多头查询5次及以上, expr: "query_cnt_3m >= 5"}
+    - {id: PA04, name: 负债收入比超过0.6, expr: "dti > 0.6"}
+    - {id: PA05, name: 命中黑名单, expr: "blacklist_hit == 1"}
+    - {id: PA06, name: 近24个月逾期2次及以上, expr: "overdue_cnt_24m >= 2"}
+  strategies:
+    champion: {name: 现行策略, rules: [PA01, PA02, PA04]}
+    challenger: {name: 新策略, rules: [PA01, PA03, PA04, PA05, PA06]}
+  scan: {field: credit_score, op: "<", values: {start: 500, stop: 740, step: 20}}
+  matrix:
+    x: {field: query_cnt_3m, op: ">=", values: [2, 3, 4, 5, 6, 7]}
+    y: {field: credit_score, op: "<", values: [540, 580, 620, 660, 700]}
+  monitor: {psi_field: query_cnt_3m, bins: [-1, 0, 1, 2, 4, 999]}

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+demo_output/
+report/
+data/
+# 不要提交真实数据
+*.local.csv
+*.local.xlsx
+~$*.xlsx

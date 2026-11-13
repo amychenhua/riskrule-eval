@@ -1,0 +1,62 @@
+key: anti_telecom_fraud
+order: 2
+name: 反电诈
+name_en: Anti Telecom Fraud
+unit: 一行一笔转账或支付交易
+action: 拦截或延迟交易，外呼核实
+id_field: txn_id
+time_field: txn_time
+label:
+  field: label_fraud
+  positive: 客户报案或经核实确认为电信网络诈骗交易
+  window: 交易后 1-2 个月（报案与核实周期）
+notes:
+  - 欺诈比例很低，样本要足够大。坏样本不足一百个时，提升度和净收益的波动会很大。
+  - 被拦截的交易没有“如果放行会怎样”的结果，标签来自外呼核实结论，口径要统一。
+  - 误拦截的代价主要是客户体验和投诉，“单笔误拦截体验成本”请按本行投诉处理成本估算。
+fields:
+  - {name: txn_id, label: 交易流水号, dtype: str, required: true, role: id, desc: 交易唯一标识, example: P202603110004521}
+  - {name: customer_id, label: 付款客户号, dtype: str, required: true, role: id, desc: 付款方客户号, example: C20031455}
+  - {name: txn_time, label: 交易时间, dtype: datetime, required: true, role: time, desc: 交易发起时间, example: "2026-03-11 21:47:03"}
+  - {name: txn_amount, label: 交易金额, dtype: float, required: true, role: amount, min: 0, desc: 转账金额（元）, example: 30000}
+  - {name: channel, label: 交易渠道, dtype: enum, required: true, role: feature, choices: [mobile, online, counter, atm], desc: mobile=手机银行 online=网银 counter=柜面 atm=自助设备, example: mobile}
+  - {name: customer_age, label: 付款人年龄, dtype: int, required: true, role: feature, min: 0, max: 120, desc: 交易时年龄, example: 67}
+  - {name: payee_is_new, label: 是否首次收款人, dtype: flag, required: true, role: feature, desc: 1=此前从未向该收款人转账, example: 1}
+  - {name: payee_account_age_days, label: 收款账户开户天数, dtype: int, required: false, role: feature, min: 0, desc: 收款账户开户至今天数（本行或可查询到时填写）, example: 12}
+  - {name: payee_risk_tag, label: 收款账户是否涉诈名单, dtype: flag, required: true, role: feature, desc: 1=命中涉诈或灰名单, example: 0}
+  - {name: night_txn, label: 是否夜间交易, dtype: flag, required: true, role: feature, desc: 1=22点至次日6点, example: 0}
+  - {name: device_changed, label: 是否更换设备, dtype: flag, required: true, role: feature, desc: 1=近7天首次使用的新设备, example: 0}
+  - {name: remote_control_app_flag, label: 是否检测到远程控制或屏幕共享, dtype: flag, required: true, role: feature, desc: 1=交易时检测到远程控制或屏幕共享软件, example: 0}
+  - {name: call_in_progress, label: 交易时是否通话中, dtype: flag, required: true, role: feature, desc: 1=交易时手机处于通话状态, example: 1}
+  - {name: txn_cnt_1h, label: 近1小时转账笔数, dtype: int, required: true, role: feature, min: 0, desc: 含本笔, example: 2}
+  - {name: amt_ratio_to_avg_90d, label: 金额与近90天笔均之比, dtype: float, required: true, role: feature, min: 0, desc: 本笔金额÷近90天笔均转账金额, example: 6.4}
+  - {name: first_large_transfer, label: 是否首次大额转账, dtype: flag, required: false, role: feature, desc: 1=该客户历史上首次发生大额转账, example: 1}
+  - {name: fraud_score, label: 电诈风险评分, dtype: float, required: false, role: score, min: 0, max: 100, desc: 模型评分，越高越可疑, example: 82.1}
+  - {name: recovered_amount, label: 已追回金额, dtype: float, required: false, role: value, min: 0, desc: 确认被骗后已止付或追回的金额（元），无则填0, example: 0}
+  - {name: label_fraud, label: 是否确认电诈, dtype: flag, required: true, role: label, desc: 1=确认为电诈交易，0=正常交易, example: 0}
+value_model:
+  description: 拦截一笔电诈交易，避免的损失是未能追回的那部分金额；误拦截正常交易产生体验成本和手续费损失；每次拦截都有外呼核实成本。
+  params:
+    friction_cost: {value: 25, label: 单笔误拦截体验与投诉成本(元)}
+    fee_rate: {value: 0.0005, label: 被拦截正常交易的手续费损失率}
+    verify_cost: {value: 8, label: 单笔拦截的外呼核实成本(元)}
+  avoided_loss: "maximum(txn_amount - recovered_amount, 0)"
+  opportunity_cost: "friction_cost + txn_amount * fee_rate"
+  unit_cost: "verify_cost"
+strategy:
+  rules:
+    - {id: TF01, name: 收款账户命中涉诈名单, expr: "payee_risk_tag == 1"}
+    - {id: TF02, name: 交易时检测到远程控制, expr: "remote_control_app_flag == 1"}
+    - {id: TF03, name: 通话中向首次收款人转账, expr: "call_in_progress == 1 and payee_is_new == 1"}
+    - {id: TF04, name: 老年客户首次大额转给新收款人, expr: "customer_age >= 60 and payee_is_new == 1 and first_large_transfer == 1"}
+    - {id: TF05, name: 新设备夜间大额, expr: "device_changed == 1 and night_txn == 1 and txn_amount >= 10000"}
+    - {id: TF06, name: 金额异常放大且收款人为新, expr: "amt_ratio_to_avg_90d >= 5 and payee_is_new == 1"}
+    - {id: TF07, name: 短时多笔转账, expr: "txn_cnt_1h >= 3"}
+  strategies:
+    champion: {name: 现行策略, rules: [TF01, TF06, TF07]}
+    challenger: {name: 新策略, rules: [TF01, TF02, TF03, TF04, TF05]}
+  scan: {field: fraud_score, op: ">=", values: {start: 30, stop: 95, step: 5}}
+  matrix:
+    x: {field: amt_ratio_to_avg_90d, op: ">=", values: [2, 3, 5, 8, 12]}
+    y: {field: fraud_score, op: ">=", values: [50, 60, 70, 80, 90]}
+  monitor: {psi_field: fraud_score}
