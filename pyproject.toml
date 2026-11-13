@@ -7,7 +7,7 @@ name = "riskrule-eval"
 version = "0.1.0"
 description = "银行风控规则策略的收益与风险量化评估：反洗钱、反电诈、贷前反欺诈、贷前审批、贷中调额、贷后预警"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 keywords = ["risk", "credit", "fraud", "aml", "rules", "cost-benefit", "风控", "规则策略"]
 classifiers = [
