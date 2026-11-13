@@ -49,7 +49,7 @@
 
 ## 安装
 
-需要 Python 3.9 及以上。
+需要 Python 3.11 及以上。
 
 ```bash
 git clone https://github.com/amychenhua/riskrule-eval.git
